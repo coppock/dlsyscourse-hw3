@@ -1,7 +1,10 @@
+import numpy as np
+
 import operator
 import math
+from builtins import sum as py_sum
 from functools import reduce
-import numpy as np
+
 from . import ndarray_backend_numpy
 from . import ndarray_backend_cpu
 
@@ -247,7 +250,10 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        if (math.prod(self._shape) != math.prod(new_shape)
+            or not self.is_compact()):
+            raise ValueError
+        return self.as_strided(new_shape, NDArray.compact_strides(new_shape))
         ### END YOUR SOLUTION
 
     def permute(self, new_axes):
@@ -272,7 +278,9 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        shape = tuple(self._shape[i] for i in new_axes)
+        strides = tuple(self._strides[i] for i in new_axes)
+        return self.as_strided(shape, strides)
         ### END YOUR SOLUTION
 
     def broadcast_to(self, new_shape):
@@ -296,7 +304,11 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        for i, dim in enumerate(self._shape):
+            assert dim == 1 or new_shape[i] == dim
+        strides = tuple(stride if self._shape[i] == new_shape[i] else 0
+                        for i, stride in enumerate(self._strides))
+        return self.as_strided(new_shape, strides)
         ### END YOUR SOLUTION
 
     ### Get and set elements
@@ -363,7 +375,19 @@ class NDArray:
         assert len(idxs) == self.ndim, "Need indexes equal to number of dimensions"
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        shape = tuple((s.stop - s.start) // s.step for s in idxs)
+        offset = py_sum(s.start * stride
+                     for stride, s in zip(self._strides, idxs))
+        factor = 1
+        reversed_strides = []
+        for stride, s in reversed(list(zip(self._strides, idxs))):
+            factor *= s.step
+            reversed_strides.append(stride * factor)
+        strides = tuple(reversed(reversed_strides))
+        return NDArray.make(
+            shape, strides=strides, device=self._device, handle=self._handle,
+            offset=self._offset + offset
+        )
         ### END YOUR SOLUTION
 
     def __setitem__(self, idxs, other):
