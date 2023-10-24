@@ -375,18 +375,14 @@ class NDArray:
         assert len(idxs) == self.ndim, "Need indexes equal to number of dimensions"
 
         ### BEGIN YOUR SOLUTION
-        shape = tuple((s.stop - s.start) // s.step for s in idxs)
+        shape = tuple((s.stop - s.start + s.step - 1) // s.step for s in idxs)
         offset = py_sum(s.start * stride
-                     for stride, s in zip(self._strides, idxs))
-        factor = 1
-        reversed_strides = []
-        for stride, s in reversed(list(zip(self._strides, idxs))):
-            factor *= s.step
-            reversed_strides.append(stride * factor)
-        strides = tuple(reversed(reversed_strides))
+                        for stride, s in zip(self._strides, idxs))
+        strides = tuple(stride * s.step
+                        for stride, s in zip(self._strides, idxs))
         return NDArray.make(
             shape, strides=strides, device=self._device, handle=self._handle,
-            offset=self._offset + offset
+            offset=self._offset+offset
         )
         ### END YOUR SOLUTION
 
