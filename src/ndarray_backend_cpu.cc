@@ -34,6 +34,77 @@ struct AlignedArray {
 
 
 
+class Tensor {
+  const AlignedArray &a;
+  const std::vector<int32_t> &shape;
+  const std::vector<int32_t> &strides;
+  size_t offset;
+  class iterator : public std::iterator<
+      std::forward_iterator_tag,
+      scalar_t,
+      ptrdiff_t,
+      scalar_t *,
+      scalar_t &> {
+    Tensor *tensor;
+    std::vector<int32_t> indices;
+    bool is_end;
+  public:
+    iterator(Tensor *tensor) : tensor(tensor),
+        indices(tensor->shape.size(), 0), is_end(false) {}
+    iterator(Tensor *tensor, bool is_end) : tensor(tensor),
+        indices(tensor->shape.size(), 0), is_end(is_end) {}
+    iterator &operator++() {
+      ssize_t i;
+
+      for (i = tensor->shape.size() - 1; i >= 0; i--) {
+        ++indices[i];
+        if (indices[i] < tensor->shape[i])
+          break;
+        else
+          indices[i] = 0;
+      }
+      if (i < 0)
+        is_end = true;
+      return *this;
+    }
+    reference operator*() {
+      size_t idx = tensor->offset;
+
+      assert(indices.size() == tensor->strides.size());
+      for (size_t i = 0; i < tensor->strides.size(); i++)
+        idx += indices[i] * tensor->strides[i];
+      assert(idx < tensor->a.size);
+      return tensor->a.ptr[idx];
+    }
+    bool operator==(iterator other) const {
+      return is_end == other.is_end && indices == other.indices
+             && tensor->a.ptr == other.tensor->a.ptr
+             && tensor->shape == other.tensor->shape
+             && tensor->strides == other.tensor->strides
+             && tensor->offset == other.tensor->offset;
+    }
+    bool operator!=(iterator other) const { return !(*this == other); }
+    void print() {
+        std::cout << '(';
+        if (indices.size()) {
+          std::cout << indices[0];
+          for (size_t i = 1; i < indices.size(); i++)
+            std::cout << ", " << indices[i];
+        }
+        std::cout << "), " << is_end << '\n';
+    }
+  };
+public:
+  Tensor(const AlignedArray& a, const std::vector<int32_t> &shape,
+         const std::vector<int32_t> &strides, size_t offset) : a(a),
+         shape(shape), strides(strides), offset(offset) {
+  }
+  iterator begin() { return iterator(this); }
+  iterator end() { return iterator(this, true); }
+};
+
+
+
 void Fill(AlignedArray* out, scalar_t val) {
   /**
    * Fill the values of an aligned array with val
@@ -62,7 +133,12 @@ void Compact(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shap
    *  function will implement here, so we won't repeat this note.)
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  Tensor tensor(a, shape, strides, offset);
+  size_t i = 0;
+  for (auto it = tensor.begin(); it != tensor.end(); ++it) {
+    assert(i < out->size);
+    out->ptr[i++] = *it;
+  }
   /// END SOLUTION
 }
 
@@ -79,7 +155,10 @@ void EwiseSetitem(const AlignedArray& a, AlignedArray* out, std::vector<int32_t>
    *   offset: offset of the *out* array (not a, which has zero offset, being compact)
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  Tensor tensor(*out, shape, strides, offset);
+  size_t i = 0;
+  for (auto it = tensor.begin(); it != tensor.end(); ++it)
+    *it = a.ptr[i++];
   /// END SOLUTION
 }
 
@@ -100,7 +179,9 @@ void ScalarSetitem(const size_t size, scalar_t val, AlignedArray* out, std::vect
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  Tensor tensor(*out, shape, strides, offset);
+  for (auto it = tensor.begin(); it != tensor.end(); ++it)
+    *it = val;
   /// END SOLUTION
 }
 
