@@ -207,57 +207,38 @@ void ScalarSetitem(const size_t size, scalar_t val, AlignedArray* out, std::vect
  * signatures above.
  */
 
-#define DEFINE_EWISE_BINARY(sym, op) \
-void Ewise##sym(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) { \
-  for (size_t i = 0; i < a.size; i++) { \
-    out->ptr[i] = op; \
-  } \
-}
-
-#define DEFINE_EWISE_INFIX(sym, op) DEFINE_EWISE_BINARY(sym, a.ptr[i] op b.ptr[i])
-#define DEFINE_EWISE_PREFIX(sym, op) DEFINE_EWISE_BINARY(sym, op(a.ptr[i], b.ptr[i]))
-#define DEFINE_EWISE_UNARY(sym, op) \
-void Ewise##sym(const AlignedArray& a, AlignedArray* out) { \
-  for (size_t i = 0; i < a.size; i++) { \
-    out->ptr[i] = op(a.ptr[i]); \
-  } \
-}
-
-#define DEFINE_SCALAR(sym, op) \
-void Scalar##sym(const AlignedArray& a, scalar_t val, AlignedArray* out) { \
+#define DEFINE(sym, b, op) \
+void sym(const AlignedArray& a, b AlignedArray* out) { \
   for (size_t i = 0; i < a.size; i++) \
     out->ptr[i] = op; \
 }
+#define COMMA ,
 
-#define DEFINE_SCALAR_INFIX(sym, op) DEFINE_SCALAR(sym, a.ptr[i] op val)
-#define DEFINE_SCALAR_PREFIX(sym, op) DEFINE_SCALAR(sym, op(a.ptr[i], val))
+#define DEFINE_UNARY(sym, op) DEFINE(Ewise##sym, , op(a.ptr[i]))
+#define DEFINE_EWISE_BINARY(sym, op) \
+  DEFINE(Ewise##sym, const AlignedArray& b COMMA, op)
 
-#define DEFINE_BOTH_INFIX(sym, op) \
-  DEFINE_EWISE_INFIX(sym, op) DEFINE_SCALAR_INFIX(sym, op)
-#define DEFINE_BOTH_PREFIX(sym, op) \
-  DEFINE_EWISE_PREFIX(sym, op) DEFINE_SCALAR_PREFIX(sym, op)
+#define DEFINE_SCALAR(sym, op) DEFINE(Scalar##sym, scalar_t val COMMA, op)
+#define DEFINE_PREFIX_SCALAR(sym, op) DEFINE_SCALAR(sym, op(a.ptr[i], val))
 
-DEFINE_BOTH_INFIX(Add, +)
-DEFINE_BOTH_INFIX(Mul, *)
-DEFINE_BOTH_INFIX(Div, /)
+#define DEFINE_INFIX(sym, op) \
+  DEFINE_EWISE_BINARY(sym, a.ptr[i] op b.ptr[i]) \
+  DEFINE_SCALAR(sym, a.ptr[i] op val)
+#define DEFINE_PREFIX(sym, op) \
+  DEFINE_EWISE_BINARY(sym, op(a.ptr[i], b.ptr[i])) \
+  DEFINE_PREFIX_SCALAR(sym, op)
+
+DEFINE_INFIX(Add, +)
+DEFINE_INFIX(Mul, *)
+DEFINE_INFIX(Div, /)
 /* Prefix operators will break when we change the type of scalar_t. */
-DEFINE_SCALAR_PREFIX(Power, powf)
-DEFINE_BOTH_PREFIX(Maximum, fmax)
-DEFINE_BOTH_INFIX(Eq, ==)
-DEFINE_BOTH_INFIX(Ge, >=)
-DEFINE_EWISE_UNARY(Log, logf)
-DEFINE_EWISE_UNARY(Exp, expf)
-DEFINE_EWISE_UNARY(Tanh, tanhf)
-
-#undef DEFINE_BOTH_PREFIX
-#undef DEFINE_BOTH_INFIX
-#undef DEFINE_SCALAR_PREFIX
-#undef DEFINE_SCALAR_INFIX
-#undef DEFINE_SCALAR
-#undef DEFINE_EWISE_UNARY
-#undef DEFINE_EWISE_PREFIX
-#undef DEFINE_EWISE_INFIX
-#undef DEFINE_EWISE
+DEFINE_PREFIX_SCALAR(Power, powf)
+DEFINE_PREFIX(Maximum, fmax)
+DEFINE_INFIX(Eq, ==)
+DEFINE_INFIX(Ge, >=)
+DEFINE_UNARY(Log, logf)
+DEFINE_UNARY(Exp, expf)
+DEFINE_UNARY(Tanh, tanhf)
 
 
 
