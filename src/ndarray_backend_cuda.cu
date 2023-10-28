@@ -202,31 +202,33 @@ void ScalarSetitem(size_t size, scalar_t val, CudaArray* out, std::vector<int32_
 // Elementwise and scalar operations
 ////////////////////////////////////////////////////////////////////////////////
 
-__global__ void EwiseAddKernel(const scalar_t* a, const scalar_t* b, scalar_t* out, size_t size) {
-  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (gid < size) out[gid] = a[gid] + b[gid];
+#define DEFINE(sym, b_param, b_kparam, b_karg, op) \
+__global__ void sym##Kernel(const scalar_t* a, b_kparam scalar_t* out, size_t size) { \
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x; \
+  if (gid < size) out[gid] = op; \
+} \
+ \
+void sym(const CudaArray& a, b_param CudaArray* out) { \
+  CudaDims dim = CudaOneDim(out->size); \
+  sym##Kernel<<<dim.grid, dim.block>>>(a.ptr, b_karg out->ptr, out->size); \
 }
+#define COMMA ,
 
-void EwiseAdd(const CudaArray& a, const CudaArray& b, CudaArray* out) {
-  /**
-   * Add together two CUDA array
-   */
-  CudaDims dim = CudaOneDim(out->size);
-  EwiseAddKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size);
-}
+#define DEFINE_UNARY(sym, op) DEFINE(Ewise##sym, ,,, op(a[gid]))
+#define DEFINE_EWISE_BINARY(sym, op) \
+  DEFINE(Ewise##sym, const CudaArray& b COMMA, const scalar_t *b COMMA, \
+         b.ptr COMMA, op)
 
-__global__ void ScalarAddKernel(const scalar_t* a, scalar_t val, scalar_t* out, size_t size) {
-  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (gid < size) out[gid] = a[gid] + val;
-}
+#define DEFINE_SCALAR(sym, op) \
+  DEFINE(Scalar##sym, scalar_t val COMMA, scalar_t val COMMA, val COMMA, op)
+#define DEFINE_PREFIX_SCALAR(sym, op) DEFINE_SCALAR(sym, op(a[gid], val))
 
-void ScalarAdd(const CudaArray& a, scalar_t val, CudaArray* out) {
-  /**
-   * Add together a CUDA array and a scalar value.
-   */
-  CudaDims dim = CudaOneDim(out->size);
-  ScalarAddKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size);
-}
+#define DEFINE_INFIX(sym, op) \
+  DEFINE_EWISE_BINARY(sym, a[gid] op b[gid]) \
+  DEFINE_SCALAR(sym, a[gid] op val)
+#define DEFINE_PREFIX(sym, op) \
+  DEFINE_EWISE_BINARY(sym, op(a[gid], b[gid])) \
+  DEFINE_PREFIX_SCALAR(sym, op)
 
 /**
  * In the code the follows, use the above template to create analogous elementise
@@ -248,6 +250,17 @@ void ScalarAdd(const CudaArray& a, scalar_t val, CudaArray* out) {
  * signatures above.
  */
 
+DEFINE_INFIX(Add, +)
+DEFINE_INFIX(Mul, *)
+DEFINE_INFIX(Div, /)
+/* Prefix operators will break when we change the type of scalar_t. */
+DEFINE_PREFIX_SCALAR(Power, powf)
+DEFINE_PREFIX(Maximum, fmax)
+DEFINE_INFIX(Eq, ==)
+DEFINE_INFIX(Ge, >=)
+DEFINE_UNARY(Log, logf)
+DEFINE_UNARY(Exp, expf)
+DEFINE_UNARY(Tanh, tanhf)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Elementwise and scalar operations
@@ -368,22 +381,22 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
   m.def("ewise_add", EwiseAdd);
   m.def("scalar_add", ScalarAdd);
 
-  // m.def("ewise_mul", EwiseMul);
-  // m.def("scalar_mul", ScalarMul);
-  // m.def("ewise_div", EwiseDiv);
-  // m.def("scalar_div", ScalarDiv);
-  // m.def("scalar_power", ScalarPower);
+  m.def("ewise_mul", EwiseMul);
+  m.def("scalar_mul", ScalarMul);
+  m.def("ewise_div", EwiseDiv);
+  m.def("scalar_div", ScalarDiv);
+  m.def("scalar_power", ScalarPower);
 
-  // m.def("ewise_maximum", EwiseMaximum);
-  // m.def("scalar_maximum", ScalarMaximum);
-  // m.def("ewise_eq", EwiseEq);
-  // m.def("scalar_eq", ScalarEq);
-  // m.def("ewise_ge", EwiseGe);
-  // m.def("scalar_ge", ScalarGe);
+  m.def("ewise_maximum", EwiseMaximum);
+  m.def("scalar_maximum", ScalarMaximum);
+  m.def("ewise_eq", EwiseEq);
+  m.def("scalar_eq", ScalarEq);
+  m.def("ewise_ge", EwiseGe);
+  m.def("scalar_ge", ScalarGe);
 
-  // m.def("ewise_log", EwiseLog);
-  // m.def("ewise_exp", EwiseExp);
-  // m.def("ewise_tanh", EwiseTanh);
+  m.def("ewise_log", EwiseLog);
+  m.def("ewise_exp", EwiseExp);
+  m.def("ewise_tanh", EwiseTanh);
 
   // m.def("matmul", Matmul);
 
