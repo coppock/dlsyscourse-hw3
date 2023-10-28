@@ -266,6 +266,92 @@ DEFINE_UNARY(Tanh, tanhf)
 // Elementwise and scalar operations
 ////////////////////////////////////////////////////////////////////////////////
 
+#define TILE_THREAD 8
+#define TILES_PER_THREAD 1
+#define TILE_BLOCK 64
+#define BLOCKDIM 8
+__global__ void MatmulKernel(const scalar_t *a, const scalar_t *b,
+                             scalar_t *out, int m, int n, int p) {
+  __shared__ scalar_t a_shmem[TILE_BLOCK][TILE_BLOCK],
+                      b_shmem[TILE_BLOCK][TILE_BLOCK],
+                      out_shmem[TILE_BLOCK][TILE_BLOCK];
+  scalar_t a_regs[TILE_THREAD][TILE_THREAD],
+           b_regs[TILE_THREAD][TILE_THREAD],
+           out_regs[TILE_THREAD][TILE_THREAD];
+
+  for (int tile_x = 0; tile_x < TILES_PER_THREAD; ++tile_x)
+    for (int tile_y = 0; tile_y < TILES_PER_THREAD; ++tile_y) {
+      int ii = (threadIdx.x + tile_x) * TILE_THREAD;
+      int kk = (threadIdx.y + tile_y) * TILE_THREAD;
+      for (int i = 0; i < TILE_THREAD; ++i)
+        for (int k = 0; k < TILE_THREAD; ++k)
+          out_shmem[ii + i][kk + k] = 0.;
+    }
+  int iii = blockIdx.x * TILE_BLOCK;
+  int kkk = blockIdx.y * TILE_BLOCK;
+  for (int jjj = 0; jjj < n; jjj += TILE_BLOCK) {
+    // Read block tiles into shared memory, zero-padding as necessary.
+    for (int tile_x = 0; tile_x < TILES_PER_THREAD; ++tile_x)
+      for (int tile_y = 0; tile_y < TILES_PER_THREAD; ++tile_y) {
+        // Because we're working with square block tiles, thread indices may be
+        // used interchangeably for the jth dimension.
+        int ii = (threadIdx.x + tile_x) * TILE_THREAD;
+        int kk = (threadIdx.y + tile_y) * TILE_THREAD;
+        for (int i = 0; i < TILE_THREAD; ++i)
+          for (int k = 0; k < TILE_THREAD; ++k) {
+            a_shmem[ii + i][kk + k] = iii + ii + i < m && jjj + kk + k < n
+                                      ? a[(iii + ii + i) * n + jjj + kk + k]
+                                      : 0.;
+            b_shmem[ii + i][kk + k] = jjj + ii + i < n && kkk + kk + k < p
+                                      ? b[(jjj + ii + i) * p + kkk + kk + k]
+                                      : 0.;
+          }
+      }
+    __syncthreads();
+    // Multiply thread tiles.
+    for (int tile_x = 0; tile_x < TILES_PER_THREAD; ++tile_x)
+      for (int tile_y = 0; tile_y < TILES_PER_THREAD; ++tile_y) {
+        // Zero output thread tile.
+        for (int i = 0; i < TILE_THREAD; ++i)
+          for (int j = 0; j < TILE_THREAD; ++j)
+            out_regs[i][j] = 0.;
+
+        int ii = (threadIdx.x + tile_x) * TILE_THREAD;
+        int kk = (threadIdx.y + tile_y) * TILE_THREAD;
+        for (int jj = 0; jj < TILE_BLOCK; jj += TILE_THREAD) {
+          // Read thread tiles into registers.
+          for (int j = 0; j < TILE_THREAD; ++j) {
+            for (int i = 0; i < TILE_THREAD; ++i)
+              a_regs[i][j] = a_shmem[ii + i][jj + j];
+            for (int k = 0; k < TILE_THREAD; ++k)
+              b_regs[j][k] = b_shmem[jj + j][kk + k];
+          }
+          // Multiply.
+          for (int i = 0; i < TILE_THREAD; ++i)
+            for (int k = 0; k < TILE_THREAD; ++k)
+              for (int j = 0; j < TILE_THREAD; ++j)
+                out_regs[i][k] += a_regs[i][j] * b_regs[j][k];
+        }
+        // Aggregate thread tile into shared memory.
+        for (int i = 0; i < TILE_THREAD; ++i)
+          for (int k = 0; k < TILE_THREAD; ++k)
+            out_shmem[ii + i][kk + k] += out_regs[i][k];
+      }
+  }
+  __syncthreads();
+  // Write block tiles to global memory.
+  for (int tile_x = 0; tile_x < TILES_PER_THREAD; ++tile_x)
+    for (int tile_y = 0; tile_y < TILES_PER_THREAD; ++tile_y) {
+      int ii = (threadIdx.x + tile_x) * TILE_THREAD;
+      int kk = (threadIdx.y + tile_y) * TILE_THREAD;
+      for (int i = 0; i < TILE_THREAD && iii + ii + i < m; ++i)
+        for (int k = 0; k < TILE_THREAD && kkk + kk + k < p; ++k)
+          out[(iii + ii + i) * p + kkk + kk + k] = out_shmem[ii + i][kk + k];
+    }
+}
+#undef TILE_BLOCK
+#undef TILES_PER_THREAD
+#undef TILE_THREAD
 
 void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, uint32_t N,
             uint32_t P) {
@@ -292,9 +378,14 @@ void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, 
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  dim3 gridDims((M + TILE_BLOCK - 1) / TILE_BLOCK,
+                (P + TILE_BLOCK - 1) / TILE_BLOCK),
+       blockDims(BLOCKDIM, BLOCKDIM);
+
+  MatmulKernel<<<gridDims, blockDims>>>(a.ptr, b.ptr, out->ptr, M, N, P);
   /// END SOLUTION
 }
+#undef BLOCKDIM
 
 ////////////////////////////////////////////////////////////////////////////////
 // Max and sum reductions
@@ -398,7 +489,7 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
   m.def("ewise_exp", EwiseExp);
   m.def("ewise_tanh", EwiseTanh);
 
-  // m.def("matmul", Matmul);
+  m.def("matmul", Matmul);
 
   // m.def("reduce_max", ReduceMax);
   // m.def("reduce_sum", ReduceSum);
