@@ -269,7 +269,6 @@ DEFINE_UNARY(Tanh, tanhf)
 #define TILE_THREAD 8
 #define TILES_PER_THREAD 1
 #define TILE_BLOCK 64
-#define BLOCKDIM 8
 __global__ void MatmulKernel(const scalar_t *a, const scalar_t *b,
                              scalar_t *out, int m, int n, int p) {
   __shared__ scalar_t a_shmem[TILE_BLOCK][TILE_BLOCK],
@@ -349,9 +348,6 @@ __global__ void MatmulKernel(const scalar_t *a, const scalar_t *b,
           out[(iii + ii + i) * p + kkk + kk + k] = out_shmem[ii + i][kk + k];
     }
 }
-#undef TILE_BLOCK
-#undef TILES_PER_THREAD
-#undef TILE_THREAD
 
 void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, uint32_t N,
             uint32_t P) {
@@ -380,17 +376,48 @@ void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, 
   /// BEGIN SOLUTION
   dim3 gridDims((M + TILE_BLOCK - 1) / TILE_BLOCK,
                 (P + TILE_BLOCK - 1) / TILE_BLOCK),
-       blockDims(BLOCKDIM, BLOCKDIM);
+       blockDims(TILE_BLOCK / TILE_THREAD / TILES_PER_THREAD,
+                 TILE_BLOCK / TILE_THREAD / TILES_PER_THREAD);
 
   MatmulKernel<<<gridDims, blockDims>>>(a.ptr, b.ptr, out->ptr, M, N, P);
   /// END SOLUTION
 }
-#undef BLOCKDIM
+#undef TILE_BLOCK
+#undef TILES_PER_THREAD
+#undef TILE_THREAD
 
 ////////////////////////////////////////////////////////////////////////////////
 // Max and sum reductions
 ////////////////////////////////////////////////////////////////////////////////
 
+// A CUDA block reduces.
+#define SCALE 2
+#define BLOCKDIM 1024
+__global__ void ReduceMaxKernel(const scalar_t *a, scalar_t *out,
+                                size_t reduce_size) {
+  __shared__ scalar_t inters[BLOCKDIM / 2];
+
+  assert(BLOCKDIM == blockDim.x);
+  // Reduce in the thread.
+  size_t reductions = (reduce_size + blockDim.x - 1) / blockDim.x,
+         idx_thread = threadIdx.x * reductions,
+         idx_block = blockIdx.x * reduce_size;
+  scalar_t acc = -INFINITY;
+  for (size_t i = idx_thread; i < idx_thread + reductions && i < reduce_size;
+       ++i)
+    if (a[idx_block + i] > acc)
+      acc = a[idx_block + i];
+  for (size_t factor = 1; factor < BLOCKDIM; factor *= SCALE) {
+    if (threadIdx.x % factor == 0 && threadIdx.x % (factor * SCALE) != 0)
+      inters[threadIdx.x / 2] = acc;
+    __syncthreads();
+    if (threadIdx.x % (factor * SCALE) == 0)
+      if (inters[(threadIdx.x + factor) / 2] > acc)
+        acc = inters[(threadIdx.x + factor) / 2];
+  }
+  if (!threadIdx.x)
+    out[blockIdx.x] = acc;
+}
 
 void ReduceMax(const CudaArray& a, CudaArray* out, size_t reduce_size) {
   /**
@@ -403,11 +430,35 @@ void ReduceMax(const CudaArray& a, CudaArray* out, size_t reduce_size) {
    *   redice_size: size of the dimension to reduce over
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  dim3 gridDims(out->size), blockDims(BLOCKDIM);
+  ReduceMaxKernel<<<gridDims, blockDims>>>(a.ptr, out->ptr, reduce_size);
   /// END SOLUTION
 }
 
 
+__global__ void ReduceSumKernel(const scalar_t *a, scalar_t *out,
+                                size_t reduce_size) {
+  __shared__ scalar_t inters[BLOCKDIM / 2];
+
+  assert(BLOCKDIM == blockDim.x);
+  // Reduce in the thread.
+  size_t reductions = (reduce_size + blockDim.x - 1) / blockDim.x,
+         idx_thread = threadIdx.x * reductions,
+         idx_block = blockIdx.x * reduce_size;
+  scalar_t acc = 0.;
+  for (size_t i = idx_thread; i < idx_thread + reductions && i < reduce_size;
+       ++i)
+    acc += a[idx_block + i];
+  for (size_t factor = 1; factor < BLOCKDIM; factor *= SCALE) {
+    if (threadIdx.x % factor == 0 && threadIdx.x % (factor * SCALE) != 0)
+      inters[threadIdx.x / 2] = acc;
+    __syncthreads();
+    if (threadIdx.x % (factor * SCALE) == 0)
+      acc += inters[(threadIdx.x + factor) / 2];
+  }
+  if (!threadIdx.x)
+    out[blockIdx.x] = acc;
+}
 
 void ReduceSum(const CudaArray& a, CudaArray* out, size_t reduce_size) {
   /**
@@ -420,7 +471,8 @@ void ReduceSum(const CudaArray& a, CudaArray* out, size_t reduce_size) {
    *   redice_size: size of the dimension to reduce over
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  dim3 gridDims(out->size), blockDims(BLOCKDIM);
+  ReduceSumKernel<<<gridDims, blockDims>>>(a.ptr, out->ptr, reduce_size);
   /// END SOLUTION
 }
 
@@ -491,6 +543,6 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
 
   m.def("matmul", Matmul);
 
-  // m.def("reduce_max", ReduceMax);
-  // m.def("reduce_sum", ReduceSum);
+  m.def("reduce_max", ReduceMax);
+  m.def("reduce_sum", ReduceSum);
 }
